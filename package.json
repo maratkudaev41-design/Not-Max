@@ -4,13 +4,14 @@
   "description": "Real-time messenger",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "build": "mkdir -p public && cp index.html public/ || true"
   },
   "dependencies": {
     "express": "^4.18.0",
     "socket.io": "^4.0.0"
   },
   "engines": {
-    "node": "16.x"
+    "node": "18.x"
   }
 }
