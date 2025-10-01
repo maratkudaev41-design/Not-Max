@@ -3,8 +3,8 @@
         // User Data Management
         let currentUser = null;
         let currentChat = null;
-        let chats = JSON.parse(localStorage.getItem('notmax_chats')) || [];
-        let users = JSON.parse(localStorage.getItem('notmax_users')) || {};
+        let chats = [];
+        let users = {};
         let socket = null;
 
         // WebRTC Variables
@@ -13,6 +13,31 @@
         let peerConnection;
         let isCaller = false;
         let currentCallType = 'audio';
+
+        // Initialize data for current user
+        function initializeUserData() {
+            if (!currentUser) return;
+            
+            // Load data only for current user
+            const userKey = `notmax_${currentUser.username}`;
+            const userData = JSON.parse(localStorage.getItem(userKey)) || { chats: [], settings: {} };
+            
+            chats = userData.chats || [];
+            users = JSON.parse(localStorage.getItem('notmax_users')) || {};
+        }
+
+        // Save data for current user
+        function saveUserData() {
+            if (!currentUser) return;
+            
+            const userKey = `notmax_${currentUser.username}`;
+            const userData = {
+                chats: chats,
+                settings: {}
+            };
+            
+            localStorage.setItem(userKey, JSON.stringify(userData));
+        }
 
         // Auth Functions
         function showRegister() {
@@ -27,13 +52,21 @@
 
         function register() {
             const name = document.getElementById('regName').value.trim();
-            const username = document.getElementById('regUsername').value.trim();
+            const username = document.getElementById('regUsername').value.trim().toLowerCase();
             const password = document.getElementById('regPassword').value;
 
             if (!name || !username || !password) {
                 alert('Заполните все поля');
                 return;
             }
+
+            if (username.length < 3) {
+                alert('Имя пользователя должно быть至少 3 символа');
+                return;
+            }
+
+            // Load existing users
+            users = JSON.parse(localStorage.getItem('notmax_users')) || {};
 
             if (users[username]) {
                 alert('Пользователь с таким именем уже существует');
@@ -45,7 +78,8 @@
                 name: name,
                 username: username,
                 password: password,
-                avatar: name.charAt(0).toUpperCase()
+                avatar: name.charAt(0).toUpperCase(),
+                createdAt: Date.now()
             };
 
             localStorage.setItem('notmax_users', JSON.stringify(users));
@@ -55,13 +89,14 @@
         }
 
         function login() {
-            const username = document.getElementById('loginUsername').value.trim();
+            const username = document.getElementById('loginUsername').value.trim().toLowerCase();
             const password = document.getElementById('loginPassword').value;
 
             loginUser(username, password);
         }
 
         function loginUser(username, password) {
+            users = JSON.parse(localStorage.getItem('notmax_users')) || {};
             const user = users[username];
             
             if (!user || user.password !== password) {
@@ -70,9 +105,17 @@
             }
 
             currentUser = user;
+            
+            // Save current user for auto-login
+            localStorage.setItem('notmax_current_user', JSON.stringify({
+                username: user.username,
+                password: user.password
+            }));
+            
             document.getElementById('authScreen').style.display = 'none';
             document.getElementById('messengerApp').style.display = 'flex';
             
+            initializeUserData();
             updateUserProfile();
             loadChats();
             initSocket();
@@ -82,6 +125,8 @@
             if (socket) {
                 socket.disconnect();
             }
+            // Clear current user
+            localStorage.removeItem('notmax_current_user');
             currentUser = null;
             document.getElementById('authScreen').style.display = 'flex';
             document.getElementById('messengerApp').style.display = 'none';
@@ -126,7 +171,7 @@
                         };
                         
                         chat.messages.push(newMessage);
-                        localStorage.setItem('notmax_chats', JSON.stringify(chats));
+                        saveUserData();
                         
                         // Если этот чат активен - показываем сообщение
                         if (currentChat && currentChat.id === chat.id) {
@@ -135,13 +180,36 @@
                         
                         // Обновляем список чатов
                         loadChats();
+                    } else {
+                        // Если чата нет - создаем его
+                        createChatFromMessage(message);
                     }
                 });
 
-                socket.on('message-history', (history) => {
-                    console.log('Message history:', history);
-                    // Пока не используем историю с сервера, используем локальную
-                });
+                // Auto-create chat when receiving message from new user
+                function createChatFromMessage(message) {
+                    const newChat = {
+                        id: Date.now().toString(),
+                        friendName: message.from, // В реальном приложении нужно получать имя
+                        friendUsername: message.from,
+                        friendAvatar: message.from.charAt(0).toUpperCase(),
+                        messages: [{
+                            text: message.text,
+                            isSent: false,
+                            timestamp: message.timestamp
+                        }],
+                        createdAt: Date.now()
+                    };
+                    
+                    chats.push(newChat);
+                    saveUserData();
+                    loadChats();
+                    
+                    // Если нет активного чата - выбираем этот
+                    if (!currentChat) {
+                        selectChat(newChat.id);
+                    }
+                }
 
                 // WebRTC events
                 socket.on('call-made', async (data) => {
@@ -181,6 +249,10 @@
                     await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
                 });
 
+                socket.on('disconnect', () => {
+                    console.log('Disconnected from server');
+                });
+
             } catch (error) {
                 console.log('Socket.io error:', error);
             }
@@ -196,20 +268,32 @@
                 return;
             }
 
+            // Сортируем чаты по последнему сообщению
+            chats.sort((a, b) => {
+                const lastA = a.messages[a.messages.length - 1];
+                const lastB = b.messages[b.messages.length - 1];
+                return (lastB?.timestamp || b.createdAt) - (lastA?.timestamp || a.createdAt);
+            });
+
             chats.forEach(chat => {
                 const lastMessage = chat.messages[chat.messages.length - 1];
                 const chatItem = document.createElement('div');
                 chatItem.className = 'chat-item';
                 chatItem.onclick = () => selectChat(chat.id);
                 
+                // Подсвечиваем активный чат
+                if (currentChat && currentChat.id === chat.id) {
+                    chatItem.classList.add('active');
+                }
+                
                 chatItem.innerHTML = `
                     <div class="chat-avatar">${chat.friendAvatar}</div>
                     <div class="chat-content">
                         <div class="chat-header">
                             <div class="chat-name">${chat.friendName}</div>
-                            <div class="chat-time">${lastMessage ? formatTime(lastMessage.timestamp) : ''}</div>
+                            <div class="chat-time">${lastMessage ? formatTime(lastMessage.timestamp) : formatTime(chat.createdAt)}</div>
                         </div>
-                        <div class="last-message">${lastMessage ? lastMessage.text : 'Нет сообщений'}</div>
+                        <div class="last-message">${lastMessage ? (lastMessage.text.length > 30 ? lastMessage.text.substring(0, 30) + '...' : lastMessage.text) : 'Нет сообщений'}</div>
                     </div>
                 `;
                 
@@ -218,6 +302,8 @@
         }
 
         function showNewChatModal() {
+            document.getElementById('friendUsername').value = '';
+            document.getElementById('friendDisplayName').value = '';
             document.getElementById('newChatModal').classList.add('active');
         }
 
@@ -226,7 +312,7 @@
         }
 
         function createNewChat() {
-            const friendUsername = document.getElementById('friendUsername').value.trim();
+            const friendUsername = document.getElementById('friendUsername').value.trim().toLowerCase();
             const friendDisplayName = document.getElementById('friendDisplayName').value.trim();
 
             if (!friendUsername || !friendDisplayName) {
@@ -234,10 +320,17 @@
                 return;
             }
 
+            if (friendUsername === currentUser.username) {
+                alert('Нельзя создать чат с самим собой');
+                return;
+            }
+
             // Check if chat already exists
             const existingChat = chats.find(chat => chat.friendUsername === friendUsername);
             if (existingChat) {
                 alert('Чат с этим пользователем уже существует');
+                selectChat(existingChat.id);
+                closeNewChatModal();
                 return;
             }
 
@@ -251,7 +344,7 @@
             };
 
             chats.push(newChat);
-            localStorage.setItem('notmax_chats', JSON.stringify(chats));
+            saveUserData();
             
             closeNewChatModal();
             loadChats();
@@ -271,6 +364,9 @@
 
             // Load messages
             loadMessages();
+            
+            // Reload chats to update active state
+            loadChats();
         }
 
         function loadMessages() {
@@ -307,12 +403,13 @@
             // Add to current chat
             currentChat.messages.push(message);
             
-            // Update storage
-            localStorage.setItem('notmax_chats', JSON.stringify(chats));
+            // Save to storage
+            saveUserData();
             
             // Update UI
             addMessageToUI(text, true, message.timestamp, true);
             messageInput.value = '';
+            messageInput.style.height = 'auto';
             
             // Send to server for other user
             if (socket) {
@@ -352,7 +449,22 @@
         }
 
         function formatTime(timestamp) {
-            return new Date(timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+            const date = new Date(timestamp);
+            const now = new Date();
+            const diff = now - date;
+            
+            // Если сегодня - показываем время
+            if (date.toDateString() === now.toDateString()) {
+                return date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+            }
+            // Если вчера - показываем "вчера"
+            else if (diff < 48 * 60 * 60 * 1000) {
+                return 'вчера';
+            }
+            // Иначе - дату
+            else {
+                return date.toLocaleDateString();
+            }
         }
 
         // Profile Editing
@@ -368,7 +480,7 @@
 
         function saveProfile() {
             const newName = document.getElementById('editName').value.trim();
-            const newUsername = document.getElementById('editUsername').value.trim();
+            const newUsername = document.getElementById('editUsername').value.trim().toLowerCase();
 
             if (!newName || !newUsername) {
                 alert('Заполните все поля');
@@ -376,13 +488,21 @@
             }
 
             // Update user data
+            const oldUsername = currentUser.username;
             currentUser.name = newName;
             currentUser.username = newUsername;
             currentUser.avatar = newName.charAt(0).toUpperCase();
             
             // Update storage
-            users[currentUser.username] = currentUser;
+            delete users[oldUsername];
+            users[newUsername] = currentUser;
             localStorage.setItem('notmax_users', JSON.stringify(users));
+            
+            // Update current user reference
+            localStorage.setItem('notmax_current_user', JSON.stringify({
+                username: newUsername,
+                password: currentUser.password
+            }));
             
             // Update UI
             updateUserProfile();
@@ -398,7 +518,7 @@
             document.getElementById('leftMenu').classList.remove('active');
         }
 
-        // WebRTC Functions
+        // WebRTC Functions (остаются без изменений)
         async function createPeerConnection(isCaller) {
             const configuration = {
                 iceServers: [
@@ -545,8 +665,13 @@
             // Check if user is already logged in
             const savedUser = localStorage.getItem('notmax_current_user');
             if (savedUser) {
-                const userData = JSON.parse(savedUser);
-                loginUser(userData.username, userData.password);
+                try {
+                    const userData = JSON.parse(savedUser);
+                    loginUser(userData.username, userData.password);
+                } catch (error) {
+                    console.log('Auto-login failed:', error);
+                    localStorage.removeItem('notmax_current_user');
+                }
             }
         });
     </script>
