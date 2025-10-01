@@ -12,12 +12,12 @@ const io = socketIo(server, {
     }
 });
 
-// Раздаем статические файлы
-app.use(express.static('public'));
+// Раздаем статические файлы из текущей папки
+app.use(express.static(__dirname));
 
 // Главная страница
 app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    res.sendFile(path.join(__dirname, 'index.html'));
 });
 
 const users = {};
@@ -112,7 +112,8 @@ io.on('connection', (socket) => {
     });
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
     console.log(`🚀 NotMax Server running on port ${PORT}`);
+    console.log(`📱 Open: https://not-max.onrender.com`);
 });
